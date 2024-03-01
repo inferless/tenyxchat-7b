@@ -1,20 +1,41 @@
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from vllm import LLM, SamplingParams
+from huggingface_hub import snapshot_download
+import os
+from pathlib import Path
 
 class InferlessPythonModel:
     def initialize(self):
-        model_id = "tenyx/TenyxChat-7B-v1"
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        model = AutoModelForCausalLM.from_pretrained(model_id,trust_remote_code=True)
-        self.pipe = pipeline("text-generation", model=model, tokenizer=tokenizer,device="cuda")
+        repo_id = "tenyx/TenyxChat-7B-v1"  # Specify the model repository ID
+        # HF_TOKEN = os.getenv("HF_TOKEN")  # Access Hugging Face token from environment variable
+        volume_nfs = "/var/nfs-mount/common_llm"  # Define nfs volume for fast cold-start
+        model_dir = f"{volume_nfs}/{repo_id}"  # Construct model directory path
+        model_dir_path = Path(model_dir)  # Convert path to Path object
+
+        # Create the model directory if it doesn't exist
+        if not model_dir_path.exists():
+            model_dir_path.mkdir(exist_ok=True, parents=True)
+
+        # Download the model snapshot from Hugging Face Hub
+        snapshot_download(
+            repo_id,
+            local_dir=model_dir
+            # token=HF_TOKEN  # Provide token if necessary
+        )
+
+        # Define sampling parameters for model generation
+        self.sampling_params = SamplingParams(temperature=0.7, top_p=0.95, max_tokens=256)
+
+        # Initialize the LLM object
+        self.llm = LLM(model=model_dir)
         
-    def infer(self, inputs):
-        prompt = inputs["prompt"]
-        messages = [{"role": "system", "content":prompt}]
-        prompt = self.pipe.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        out = self.pipe(prompt, max_new_tokens=256, do_sample=True, top_p=0.9,temperature=0.9)
-        generated_text = out[0]["generated_text"][len(prompt):]
-        return {'generated_result': generated_text}
+    def infer(self,inputs):
+        prompts = inputs["prompt"]  # Extract the prompt from the input
+        result = self.llm.generate(prompts, self.sampling_params)
+        # Extract the generated text from the result
+        result_output = [output.outputs[0].text for output in result]
+
+        # Return a dictionary containing the result
+        return {'generated_result': result_output[0]}
 
     def finalize(self):
         pass
